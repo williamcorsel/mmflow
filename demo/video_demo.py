@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from argparse import ArgumentParser
 from typing import Sequence
+import time
 
 import cv2
 import numpy as np
@@ -8,6 +9,8 @@ from numpy import ndarray
 
 from mmflow.apis import inference_model, init_model
 from mmflow.datasets import visualize_flow
+
+from tqdm import tqdm
 
 try:
     import imageio
@@ -27,6 +30,9 @@ def parse_args():
         help='video file of ground truth for input video')
     parser.add_argument(
         '--device', default='cuda:0', help='Device used for inference')
+    parser.add_argument(
+        '--crop', default=None, nargs='+', help="crop video frames"
+    )
     args = parser.parse_args()
     return args
 
@@ -53,6 +59,13 @@ def main(args):
         flag, img = cap.read()
         if not flag:
             break
+        
+        if args.crop is not None:
+            crop = [int(x) for x in args.crop]
+            if len(crop) == 2:
+                img = img[:crop[0], :crop[1], :]
+            elif len(crop) == 4:
+                img = img[crop[0]:crop[1], crop[2]:crop[3], :]
         imgs.append(img)
 
     gts = []
@@ -73,12 +86,16 @@ def main(args):
             imgs) - 1, 'Ground truth length doesn\'t match video frames'
 
     frame_list = []
-
-    for i in range(len(imgs) - 1):
+    times = []
+    for i in tqdm(range(len(imgs) - 1)):
         img1 = imgs[i]
         img2 = imgs[i + 1]
         # estimate flow
+
+        start = time.perf_counter()
         result = inference_model(model, img1, img2)
+        time_taken = time.perf_counter() - start
+        times.append(time_taken)
         flow_map = visualize_flow(result, None)
         # visualize_flow return flow map with RGB order
         flow_map = cv2.cvtColor(flow_map, cv2.COLOR_RGB2BGR)
@@ -91,8 +108,11 @@ def main(args):
     size = (frame_list[0].shape[1], frame_list[0].shape[0])
     cap.release()
 
+    print(f"Avg execution time: {sum(times) / len(times)}")
+
     if args.out[-3:] == 'gif':
         create_gif(frame_list, args.out, 1 / fps)
+        create_gif(imgs, args.out[:-3]+"_orig.gif", 1 / fps)
     else:
         create_video(frame_list, args.out, fourcc, fps, size)
 
